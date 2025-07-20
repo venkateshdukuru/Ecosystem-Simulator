@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ecosystem Simulator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        canvas {
+            background-image: 
+                linear-gradient(rgba(0, 128, 0, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 128, 0, 0.1) 1px, transparent 1px);
+            background-size: 10px 10px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto p-4 md:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl md:text-5xl font-bold text-gray-900">Virtual Ecosystem Simulator</h1>
+            <p class="text-lg text-gray-600 mt-2">Watch life evolve in a digital world of your creation.</p>
+        </header>
+
+        <div class="flex flex-col lg:flex-row gap-8">
+
+            <!-- Controls Panel -->
+            <div class="w-full lg:w-1/3 bg-white p-6 rounded-2xl shadow-lg">
+                <h2 class="text-2xl font-bold mb-4 border-b pb-2">Controls</h2>
+                <div class="grid grid-cols-2 gap-4 mb-6">
+                    <button id="start-pause-btn" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">Start</button>
+                    <button id="reset-btn" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">Reset</button>
+                </div>
+
+                <!-- Add Species Form -->
+                <div class="bg-gray-50 p-4 rounded-xl mb-6">
+                    <h3 class="text-xl font-bold mb-3">Add a New Species</h3>
+                    <div class="space-y-3">
+                        <input type="text" id="species-name" placeholder="Species Name" class="w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-400">
+                        <div class="flex items-center gap-2">
+                            <label for="species-color">Color:</label>
+                            <input type="color" id="species-color" value="#ff0000" class="h-8 w-12 border-none rounded-md">
+                        </div>
+                        <select id="species-diet" class="w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-400">
+                            <option value="herbivore">Herbivore (eats plants)</option>
+                            <option value="carnivore">Carnivore (eats herbivores)</option>
+                        </select>
+                        <input type="number" id="initial-population" min="1" value="10" placeholder="Initial Population" class="w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-400">
+                        <button id="add-species-btn" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">Add Species</button>
+                    </div>
+                </div>
+
+                <!-- Species Stats -->
+                <div>
+                    <h3 class="text-xl font-bold mb-3">Population Stats</h3>
+                    <div id="stats-container" class="space-y-2 text-sm">
+                        <p class="text-gray-500">No species added yet.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Simulation Canvas -->
+            <div class="w-full lg:w-2/3">
+                <canvas id="ecosystem-canvas" class="w-full bg-white rounded-2xl shadow-lg"></canvas>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // --- Canvas and Context Setup ---
+        const canvas = document.getElementById('ecosystem-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- Simulation Parameters ---
+        const GRID_SIZE = 80; // The world is an 80x80 grid
+        let cellSize; // Size of each cell in pixels, will be calculated dynamically
+
+        // --- Simulation State ---
+        let speciesTypes = [];
+        let creatures = [];
+        let plants = [];
+        let simulationRunning = false;
+        let animationFrameId;
+
+        // --- DOM Elements ---
+        const startPauseBtn = document.getElementById('start-pause-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const addSpeciesBtn = document.getElementById('add-species-btn');
+        const statsContainer = document.getElementById('stats-container');
+
+        // --- Creature Class ---
+        class Creature {
+            constructor(species, x, y) {
+                this.species = species;
+                this.x = x !== undefined ? x : Math.floor(Math.random() * GRID_SIZE);
+                this.y = y !== undefined ? y : Math.floor(Math.random() * GRID_SIZE);
+                this.energy = 50; // Starting energy
+                this.age = 0;
+            }
+
+            // The main update function for a creature, called each simulation step
+            update() {
+                this.energy -= 1; // Cost of living
+                this.age++;
+
+                // Death from old age or starvation
+                if (this.energy <= 0 || this.age > 200) {
+                    return 'dead';
+                }
+
+                // Reproduction
+                if (this.energy >= 100) {
+                    this.energy -= 50;
+                    return new Creature(this.species, this.x, this.y);
+                }
+
+                // Find food and move
+                const target = this.findFood();
+                if (target) {
+                    this.moveTowards(target);
+                    // Eat if on the same cell as the food
+                    if (this.x === target.x && this.y === target.y) {
+                        this.eat(target);
+                    }
+                } else {
+                    // Move randomly if no food is found
+                    this.moveRandomly();
+                }
+            }
+
+            // Find the closest food source
+            findFood() {
+                let potentialFood = [];
+                if (this.species.diet === 'herbivore') {
+                    potentialFood = plants;
+                } else if (this.species.diet === 'carnivore') {
+                    potentialFood = creatures.filter(c => c.species.diet === 'herbivore');
+                }
+
+                if (potentialFood.length === 0) return null;
+
+                // Find the closest food item
+                let closest = null;
+                let minDistance = Infinity;
+                for (const food of potentialFood) {
+                    const distance = Math.hypot(this.x - food.x, this.y - food.y);
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closest = food;
+                    }
+                }
+                return closest;
+            }
+
+            // Move one step towards a target
+            moveTowards(target) {
+                const dx = Math.sign(target.x - this.x);
+                const dy = Math.sign(target.y - this.y);
+                this.x = (this.x + dx + GRID_SIZE) % GRID_SIZE;
+                this.y = (this.y + dy + GRID_SIZE) % GRID_SIZE;
+            }
+
+            // Move to a random adjacent cell
+            moveRandomly() {
+                this.x = (this.x + Math.floor(Math.random() * 3) - 1 + GRID_SIZE) % GRID_SIZE;
+                this.y = (this.y + Math.floor(Math.random() * 3) - 1 + GRID_SIZE) % GRID_SIZE;
+            }
+
+            // Consume food and gain energy
+            eat(food) {
+                this.energy += 25;
+                if (this.species.diet === 'herbivore') {
+                    // Remove the plant
+                    plants = plants.filter(p => p !== food);
+                } else {
+                    // Remove the eaten creature
+                    creatures = creatures.filter(c => c !== food);
+                }
+            }
+
+            // Draw the creature on the canvas
+            draw() {
+                ctx.fillStyle = this.species.color;
+                ctx.beginPath();
+                ctx.arc(
+                    this.x * cellSize + cellSize / 2,
+                    this.y * cellSize + cellSize / 2,
+                    cellSize / 2,
+                    0,
+                    2 * Math.PI
+                );
+                ctx.fill();
+            }
+        }
+
+        // --- Main Simulation Functions ---
+
+        // Initializes or resets the simulation
+        function init() {
+            // Dynamically set canvas size
+            const canvasContainer = canvas.parentElement;
+            const size = Math.min(canvasContainer.clientWidth, window.innerHeight * 0.7);
+            canvas.width = size;
+            canvas.height = size;
+            cellSize = canvas.width / GRID_SIZE;
+
+            creatures = [];
+            plants = [];
+            
+            // Re-populate creatures based on species list
+            speciesTypes.forEach(species => {
+                for (let i = 0; i < species.initialPopulation; i++) {
+                    creatures.push(new Creature(species));
+                }
+            });
+
+            // Initial plant population
+            for (let i = 0; i < 150; i++) {
+                growPlant();
+            }
+            
+            draw();
+            updateStats();
+        }
+
+        // The main loop
+        function simulationLoop() {
+            if (!simulationRunning) return;
+
+            // Grow new plants
+            if (Math.random() < 0.5) { // 50% chance to grow a new plant each frame
+                growPlant();
+            }
+
+            // Update all creatures
+            const newCreatures = [];
+            creatures = creatures.filter(creature => {
+                const result = creature.update();
+                if (result instanceof Creature) {
+                    newCreatures.push(result);
+                }
+                return result !== 'dead';
+            });
+            creatures.push(...newCreatures);
+
+            // Draw the world
+            draw();
+            updateStats();
+
+            animationFrameId = requestAnimationFrame(simulationLoop);
+        }
+
+        // --- Drawing Functions ---
+
+        function draw() {
+            // Clear canvas with a faint green background
+            ctx.fillStyle = '#f0f9f0';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw plants (small green squares)
+            ctx.fillStyle = '#22c55e';
+            plants.forEach(plant => {
+                ctx.fillRect(plant.x * cellSize, plant.y * cellSize, cellSize, cellSize);
+            });
+
+            // Draw creatures
+            creatures.forEach(creature => creature.draw());
+        }
+        
+        // --- Helper Functions ---
+
+        function growPlant() {
+            if (plants.length >= 300) return; // Max plants
+            const x = Math.floor(Math.random() * GRID_SIZE);
+            const y = Math.floor(Math.random() * GRID_SIZE);
+            // Ensure no plant already exists at this location
+            if (!plants.some(p => p.x === x && p.y === y)) {
+                plants.push({ x, y });
+            }
+        }
+
+        function updateStats() {
+            if (speciesTypes.length === 0) {
+                statsContainer.innerHTML = '<p class="text-gray-500">No species added yet.</p>';
+                return;
+            }
+
+            statsContainer.innerHTML = '';
+            speciesTypes.forEach(species => {
+                const count = creatures.filter(c => c.species.id === species.id).length;
+                const statEl = document.createElement('div');
+                statEl.className = 'flex justify-between items-center p-2 bg-gray-100 rounded-md';
+                statEl.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <div class="w-4 h-4 rounded-full" style="background-color: ${species.color};"></div>
+                        <span class="font-medium">${species.name}</span>
+                        <span class="text-xs text-gray-500">(${species.diet})</span>
+                    </div>
+                    <span class="font-bold">${count}</span>
+                `;
+                statsContainer.appendChild(statEl);
+            });
+        }
+        
+        // --- Event Listeners ---
+
+        startPauseBtn.addEventListener('click', () => {
+            simulationRunning = !simulationRunning;
+            if (simulationRunning) {
+                startPauseBtn.textContent = 'Pause';
+                startPauseBtn.classList.remove('bg-blue-500', 'hover:bg-blue-600');
+                startPauseBtn.classList.add('bg-yellow-500', 'hover:bg-yellow-600');
+                simulationLoop();
+            } else {
+                startPauseBtn.textContent = 'Start';
+                startPauseBtn.classList.remove('bg-yellow-500', 'hover:bg-yellow-600');
+                startPauseBtn.classList.add('bg-blue-500', 'hover:bg-blue-600');
+                cancelAnimationFrame(animationFrameId);
+            }
+        });
+
+        resetBtn.addEventListener('click', () => {
+            simulationRunning = false;
+            startPauseBtn.textContent = 'Start';
+            startPauseBtn.classList.remove('bg-yellow-500', 'hover:bg-yellow-600');
+            startPauseBtn.classList.add('bg-blue-500', 'hover:bg-blue-600');
+            cancelAnimationFrame(animationFrameId);
+            speciesTypes = []; // Clear all species definitions on reset
+            init();
+        });
+
+        addSpeciesBtn.addEventListener('click', () => {
+            const name = document.getElementById('species-name').value || 'Unnamed';
+            const color = document.getElementById('species-color').value;
+            const diet = document.getElementById('species-diet').value;
+            const initialPopulation = parseInt(document.getElementById('initial-population').value, 10);
+
+            if (isNaN(initialPopulation) || initialPopulation < 1) {
+                alert('Please enter a valid initial population.');
+                return;
+            }
+
+            const newSpecies = {
+                id: Date.now(), // Simple unique ID
+                name,
+                color,
+                diet,
+                initialPopulation
+            };
+
+            speciesTypes.push(newSpecies);
+
+            // Add new creatures to the simulation immediately
+            for (let i = 0; i < initialPopulation; i++) {
+                creatures.push(new Creature(newSpecies));
+            }
+
+            draw();
+            updateStats();
+        });
+
+        // Handle window resizing
+        window.addEventListener('resize', init);
+
+        // --- Initial Load ---
+        init();
+
+    </script>
+</body>
+</html>
